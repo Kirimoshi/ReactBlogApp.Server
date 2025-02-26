@@ -32,7 +32,31 @@ builder.Services.AddSwaggerGen(c =>
     var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
     c.IncludeXmlComments(xmlPath);
 
+    c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
+    {
+        In = ParameterLocation.Header,
+        Description = "Enter 'Bearer {token}'! START WITH 'Bearer'!",
+        Name = "Authorization",
+        Type = SecuritySchemeType.ApiKey
+    });
+
+    c.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme
+            {
+                Reference = new OpenApiReference
+                {
+                    Type = ReferenceType.SecurityScheme,
+                    Id = "Bearer"
+                }
+            },
+            new List<string>()
+        }
+    });
 });
+
+
 
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
@@ -69,28 +93,35 @@ app.UseExceptionHandler();
 app.MapPost("/login", async (LoginUserRequest loginData, BlogContext context) =>
 {
     UserModel? user = await context.Users.FirstOrDefaultAsync(
-        u => u.Email == loginData.Email && u.Password == loginData.Password
-        );
-    if (user is null) return Results.Unauthorized();
+        u => u.Email == loginData.Email
+    );
 
-        var claims = new List<Claim> { new(ClaimTypes.Name, user.Email) };
-        
-        var jwt = new JwtSecurityToken(
-                issuer: AuthOptions.ISSUER,
-                audience: AuthOptions.AUDIENCE,
-                claims: claims,
-                expires: DateTime.UtcNow.Add(TimeSpan.FromMinutes(2)),
-                signingCredentials: new SigningCredentials(AuthOptions.GetSymmetricSecurityKey(), SecurityAlgorithms.HmacSha256));
-        var encodedJwt = new JwtSecurityTokenHandler().WriteToken(jwt);
+    if (user is null || !BCrypt.Net.BCrypt.Verify(loginData.Password, user.PasswordHash))
+        return Results.Unauthorized();
 
-        
-        var response = new
-        {
-            access_token = encodedJwt,
-            username = user.Email
-        };
+    var claims = new List<Claim>
+    {
+        new(ClaimTypes.Name, user.Email),
+        new(ClaimTypes.NameIdentifier, user.Id.ToString())
+    };
 
-        return Results.Json(response);
+    var jwt = new JwtSecurityToken(
+        issuer: AuthOptions.ISSUER,
+        audience: AuthOptions.AUDIENCE,
+        claims: claims,
+        expires: DateTime.UtcNow.Add(TimeSpan.FromMinutes(30)),
+        signingCredentials: new SigningCredentials(AuthOptions.GetSymmetricSecurityKey(), SecurityAlgorithms.HmacSha256)
+    );
+
+    var encodedJwt = new JwtSecurityTokenHandler().WriteToken(jwt);
+
+    var response = new
+    {
+        access_token = encodedJwt,
+        username = user.Email
+    };
+
+    return Results.Json(response);
 });
 
 app.MapGroup("/api/v1/")
